@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openmods.nexus/openmods.schema.json",
+  "openmods": 1,
+  "name": "Passive Regen",
+  "summary": "Your health regenerates by itself: 1.5% of max health every 2 seconds. The rate and regen in combat are set in config.lua, live in game.",
+  "games": ["phantom-blade-zero"],
+  "tags": ["gameplay"],
+  "requires": ["UE4SS (tested with v3.0.1-1195-g1ceefac8)"],
+  "gameVersions": ["Release (Steam build 26266538)"],
+  "cover": "docs/cover.png"
+}
