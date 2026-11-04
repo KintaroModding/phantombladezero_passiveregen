@@ -2,13 +2,13 @@
   "name": "Passive Regen",
   "folder": "phantombladezero_passiveregen",
   "author": "Kintaro",
-  "version": "1.1",
+  "version": "1.2",
   "description": "Health regenerates by itself: 1.5% of the maximum every 2 seconds. The percent and whether it also works in combat are set in config.lua, live in game.",
   "kind": "ue4ss",
   "game": "phantombladezero",
   "gameFolder": "PBZ",
   "win64Path": "platform\\steam",
-  "gameVersion": "CL-301524_JKS-17219",
+  "gameVersion": "CL-302256_JKS-17280",
   "engine": "UE5_7",
   "ue4ss": "v3.0.1-1195-g1ceefac8"
 }

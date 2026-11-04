@@ -3,7 +3,7 @@
 Health regenerates by itself: 1.5% of the maximum every 2 seconds. The percent and whether it also works in combat are set in config.lua, live in game.
 
 A [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) Lua mod for Phantom Blade Zero (Unreal Engine 5.7), made with
-game version `CL-301524_JKS-17219` and UE4SS `v3.0.1-1195-g1ceefac8`. This README is for developers; what the mod does and
+game version `CL-302256_JKS-17280` and UE4SS `v3.0.1-1195-g1ceefac8`. This README is for developers; what the mod does and
 how to install it are in [openmods.md](openmods.md), the mod page on [openmods](https://openmods.nexus).
 
 ## How it works
@@ -14,10 +14,11 @@ so a hitch or a loading screen gives no burst). It skips the step while the game
 (health 0 or the tag `CharacterState.Dead`), at full health, and in combat (the tag `CharacterState.InCombat`) when
 `InCombat = false`.
 
-The heal goes through the game's cheat command `UPBZCheatManager:GM_SetHealth(float)`, so the health bar shows it at
-once. The cheat manager exists when UE4SS's `CheatManagerEnablerMod` made it (read again on each step: the game makes a
-new one after a map load or a respawn). Without it, or when the command did not reach the value, the mod writes
-`Health.BaseValue` and `CurrentValue` directly; the bar then shows the value at the game's next health change.
+The mod writes `Health.BaseValue` and `CurrentValue` directly. A direct write sends none of the game's health events, so
+the mod then calls the health bar's own handler of that event, `OnHeathChanged` of `WB_PlayerHPBar_V1_C` (the game's
+spelling), and the bar shows the step at once. It keeps the widgets it found and searches again after a map load, when
+they are gone, and after 15 heals. Up to 1.1 the heal went through the cheat command `GM_SetHealth`, which leaves the
+health as it is since the game update of 2026-11-04 (Steam build 26367565).
 
 ## Deploy and test
 

@@ -6,12 +6,13 @@
 -- (health 0 or the tag CharacterState.Dead), or at full health.
 --
 -- How: every STEP_MS on the game thread. The amount follows the real time since the last step (os.clock), at most
--- MAX_STEP_SECONDS (two steps), so a hitch or a loading screen gives no burst. The heal goes through the game's cheat
--- command
--- UPBZCheatManager:GM_SetHealth (a number only, so it is safe to call): the health bar shows it at once. The cheat
--- manager exists when UE4SS's CheatManagerEnablerMod made it (a new one after each map load or respawn, so it is read
--- each time). Without it, or when the command did not reach the value, the mod writes the player's Health (BaseValue
--- and CurrentValue); the bar then shows it at the game's next health change. The same way as Live by the Blade.
+-- MAX_STEP_SECONDS (two steps), so a hitch or a loading screen gives no burst. The mod writes the player's Health
+-- (BaseValue and CurrentValue). A direct write sends none of the game's health events, so the mod then calls the health
+-- bar's own handler of that event, OnHeathChanged of WB_PlayerHPBar_V1_C (the game's spelling; numbers only, and it
+-- reads the real health itself), and the bar shows the step at once. Up to 1.1 the heal went through the cheat command
+-- GM_SetHealth; since the game update of 2026-11-04 (Steam build 26367565) that command leaves the health as it is.
+-- The game's AttributeUtils:ModifyCharacterAttributeValue is no way out: its FGameplayAttribute crashes when passed
+-- from Lua.
 --
 -- Settings: the player edits Scripts\config.lua. The mod reads it at start and again every CONFIG_INTERVAL_MS, so a
 -- change shows without a restart; a broken or half-saved file keeps the last settings. DEFAULTS holds every setting
@@ -22,16 +23,21 @@
 local UEHelpers = require("UEHelpers")
 
 local MOD_NAME = "Passive Regen"
-local VERSION = "1.1"
+local VERSION = "1.2"
 local STEP_MS = 2000
 local CONFIG_INTERVAL_MS = 5000
 local MAX_STEP_SECONDS = 4
 local COMBAT_TAG = "CharacterState.InCombat"
 local DEAD_TAG = "CharacterState.Dead"
+local BAR_CLASS_NAME = "WB_PlayerHPBar_V1_C"
+-- The bar widgets are kept; while healing, search again after this many heals (30 s): a new HUD after a death can sit
+-- next to an old one that is still valid.
+local BAR_SEARCH_EVERY = 15
 -- Log at most this many error lines in total.
 local MAX_ERROR_LOGS = 5
--- LogDetail: at most this many lines per game start, and a heal line on every n-th heal.
+-- LogDetail: at most this many lines per game start, a heal line on the first heals and on every n-th heal.
 local MAX_DETAIL_LOGS = 400
+local HEAL_LOG_FIRST = 3
 local HEAL_LOG_EVERY = 10
 
 -- Every setting with its default; config.lua ships the same names and values (tests\test_main.py checks it).
@@ -204,7 +210,8 @@ local controller = nil
 local lastStep = nil
 local state = nil            -- LogDetail: why the last step healed or not, to log each change once
 local heals = 0
-local cheatMissingLogged = false
+local bars = nil             -- the bar widgets of the last search; nil: search at the next heal
+local healsSinceSearch = 0
 
 local function Health(pawn)
     local set = pawn.AttributeSetBase
@@ -216,31 +223,38 @@ local function HasTag(pawn, name)
     return Valid(abilities) and abilities:GetGameplayTagCount({ TagName = name }) > 0
 end
 
--- GM_SetHealth of the game's cheat manager: true when it ran.
-local function SetHealthByCheat(target)
-    local cheat = controller.CheatManager
-    if not Valid(cheat) then
-        if not cheatMissingLogged then
-            cheatMissingLogged = true
-            Log("No cheat manager (UE4SS's CheatManagerEnablerMod is off?): the regen is written directly; the health "
-                .. "bar shows it at the game's next health change.")
-        end
-        return false
-    end
-    local ok, err = pcall(function()
-        cheat:GM_SetHealth(target)
-    end)
-    if not ok then
-        LogError("GM_SetHealth failed (" .. tostring(err) .. "); the regen is written directly.")
-        return false
-    end
-    return true
-end
-
 local function WriteHealth(pawn, target)
     local data = pawn.AttributeSetBase.Health
     data.BaseValue = target
     data.CurrentValue = target
+end
+
+-- Calls the bar's handler of the game's health event; the number of widgets that took it. A failed call never stops the
+-- heal: without it the bar shows the value at the game's next health change.
+local function RefreshBar(newValue, oldValue)
+    healsSinceSearch = healsSinceSearch + 1
+    if bars == nil or healsSinceSearch >= BAR_SEARCH_EVERY then
+        bars = FindAllOf(BAR_CLASS_NAME) or {}
+        healsSinceSearch = 0
+    end
+    local count = 0
+    for _, bar in ipairs(bars) do
+        if Valid(bar) then
+            local ok, err = pcall(function()
+                bar:OnHeathChanged(newValue, oldValue)
+            end)
+            if ok then
+                count = count + 1
+            else
+                LogError("OnHeathChanged failed (" .. tostring(err) .. "); the bar shows the regen at the next health "
+                    .. "change.")
+            end
+        end
+    end
+    if count == 0 and #bars > 0 then
+        bars = nil -- all gone: the next heal searches at once
+    end
+    return count
 end
 
 -- Logs the reason when it changed since the last step (LogDetail).
@@ -295,23 +309,14 @@ local function Step()
     end
     -- PercentPerTick for a full step; a shorter or longer step (a late loop) gets its share of it.
     local target = math.min(max, health + max * Settings.PercentPerTick / 100 * elapsed / (STEP_MS / 1000))
-    local way = "GM_SetHealth"
-    if not SetHealthByCheat(target) then
-        way = "direct write"
-        WriteHealth(pawn, target)
-    else
-        local after = Health(pawn)
-        if type(after) == "number" and math.abs(after - target) > 0.5 then
-            -- The cheat command did not reach the value: write it.
-            way = string.format("GM_SetHealth left %.1f, then direct write", after)
-            WriteHealth(pawn, target)
-        end
-    end
+    WriteHealth(pawn, target)
+    local widgets = RefreshBar(target, health)
     heals = heals + 1
     Note(inCombat and "on (in combat)" or "on (out of combat)")
-    if heals == 1 or heals % HEAL_LOG_EVERY == 0 then
-        Detail(function() return string.format("heal %d: health %.1f -> %.1f of %.1f (+%.2f in %.2f s) via %s", heals,
-            health, target, max, target - health, elapsed, way) end)
+    if heals <= HEAL_LOG_FIRST or heals % HEAL_LOG_EVERY == 0 then
+        Detail(function() return string.format(
+            "heal %d: health %.1f -> %.1f of %.1f (+%.2f in %.2f s), bar: %d widget(s)", heals, health, target, max,
+            target - health, elapsed, widgets) end)
     end
 end
 
@@ -345,8 +350,9 @@ end
 
 RegisterLoadMapPostHook(function()
     local ok, err = pcall(function()
-        -- The old world's controller is gone; the next step finds the new one. No burst for the loading time.
+        -- The old world's controller and HUD are gone; the next step finds the new ones. No burst for the loading time.
         controller = nil
+        bars = nil
         lastStep = nil
     end)
     if not ok then

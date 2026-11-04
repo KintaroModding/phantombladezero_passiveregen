@@ -1,15 +1,15 @@
 """Offline test of Scripts/main.lua with lupa (Lua 5.4) and small mocks of UE4SS and the game.
 
 The mocks stand in for the UE4SS functions that the script uses (the game-thread loops LoopInGameThreadWithDelay, the
-old LoopAsync, RegisterLoadMapPostHook, FName, UEHelpers) and for the game: the player controller with its cheat
-manager (GM_SetHealth sets the health, or does nothing like an empty cheat, or throws), the player with its health
-attributes and its ability system (tags; a parent tag counts its children, as in UE), the pause, and a clock
-(os.clock) that the test moves.
+old LoopAsync, RegisterLoadMapPostHook, FName, FindAllOf, UEHelpers) and for the game: the player controller, the player
+with its health attributes and its ability system (tags; a parent tag counts its children, as in UE), the health bar
+widget (OnHeathChanged counts its calls, or throws), the pause, and a clock (os.clock) that the test moves.
 
 The checks: the loops; the regen per step (2 s) and per real time (capped after a hitch); full health, death, the pause;
-combat with InCombat on and off; live settings; the fallback to a direct write; LogDetail lines. Then the settings
-files a player may have instead of the shipped config.lua: main.lua must start, and every setting the file does not
-give keeps its default; the shipped config.lua must hold exactly the defaults of main.lua.
+combat with InCombat on and off; live settings; the direct write and the bar's handler, with its kept widgets and its
+searches; LogDetail lines. Then the settings files a player may have instead of the shipped config.lua: main.lua must
+start, and every setting the file does not give keeps its default; the shipped config.lua must hold exactly the defaults
+of main.lua.
 
 Usage:
     python tests/test_main.py        (needs lupa: python -m pip install lupa)
@@ -66,15 +66,26 @@ end })
 HEALTH = { BaseValue = 500, CurrentValue = 500 }
 PAWN = Object({ AttributeSetBase = { Health = HEALTH, Health_Max = { BaseValue = 1000, CurrentValue = 1000 } },
     AbilitySystemComponent = ABILITIES })
--- The cheat manager: "works" sets the health, "empty" does nothing, "throws" errors.
-CHEAT_MODE = "works"
-CHEAT_CALLS = 0
-CHEAT = Object({ GM_SetHealth = function(self, value)
-    CHEAT_CALLS = CHEAT_CALLS + 1
-    if CHEAT_MODE == "throws" then error("GM_SetHealth failed") end
-    if CHEAT_MODE == "works" then HEALTH.CurrentValue = value end
+-- The health bar: its handler counts the calls and keeps the last values; "throws" errors. FindAllOf gives UE4SS's nil
+-- when there is no widget.
+BAR_MODE = "works"
+BAR_CALLS = 0
+BAR_NEW, BAR_OLD = nil, nil
+BAR = Object({ OnHeathChanged = function(self, new, old)
+    if BAR_MODE == "throws" then error("no such function") end
+    BAR_CALLS = BAR_CALLS + 1
+    BAR_NEW, BAR_OLD = new, old
 end })
-CONTROLLER = Object({ Pawn = PAWN, CheatManager = CHEAT })
+BARS = { BAR }
+SEARCHES = 0
+SEARCHED = nil
+function FindAllOf(name)
+    SEARCHES = SEARCHES + 1
+    SEARCHED = name
+    if #BARS == 0 then return nil end
+    return BARS
+end
+CONTROLLER = Object({ Pawn = PAWN })
 CONTROLLER_CALLS = 0
 PAUSED = false
 STATICS = {}
@@ -179,16 +190,19 @@ def main() -> None:
 
         e = r.eval
         r.do("STEP()")
-        check(e("HP()") == "515" and e("CHEAT_CALLS") == 1, "one step (2 s): +1.5% of the max health (1000) via GM_SetHealth")
+        check(e("HP()") == "515" and e("HEALTH.BaseValue") == 515,
+              "one step (2 s): +1.5% of the max health (1000), BaseValue and CurrentValue written")
+        check(e("BAR_CALLS") == 1 and e("BAR_NEW") == 515 and e("BAR_OLD") == 500
+              and e("SEARCHED") == "WB_PlayerHPBar_V1_C", "the bar's handler gets the new and the old health")
         r.do("STEP(1)")
         check(e("HP()") == "522.5", "a step after 1 s: half the amount (real time)")
         r.do("STEP(30)")
         check(e("HP()") == "552.5", "after a 30 s hitch: at most two steps (4 s) of regen, no burst")
         r.do("HEALTH.CurrentValue = 995 STEP()")
         check(e("HP()") == "1000", "never above the max health")
-        calls = e("CHEAT_CALLS")
+        calls = e("BAR_CALLS")
         r.do("STEP() STEP()")
-        check(e("CHEAT_CALLS") == calls, "full health: no call")
+        check(e("BAR_CALLS") == calls, "full health: no write, no call")
         r.do("PAWN.AttributeSetBase.Health_Max.CurrentValue = 2000 STEP()")
         check(e("HP()") == "1030", "a new max health (2000): 1.5% of the current max")
         r.do("HEALTH.CurrentValue = 0 STEP()")
@@ -223,25 +237,33 @@ def main() -> None:
         check(any("PercentPerTick = 80 is outside 0.1 to 25; 25 is used" in line for line in r.log())
               and e("HP()") == "795", "a percent out of range is clamped (25)")
 
-        # --- The heal ways.
-        nocheat = Run(folder("nocheat"), "CONTROLLER.CheatManager = Object({ valid = false })")
-        nocheat.do("STEP() STEP()")
-        log = nocheat.log()
-        check(nocheat.eval("HP()") == "530" and nocheat.eval("HEALTH.BaseValue") == 530
-              and sum("No cheat manager" in line for line in log) == 1,
-              "no cheat manager: a direct write (BaseValue and CurrentValue), logged once")
-        empty = Run(folder("empty"), "CHEAT_MODE = 'empty'")
-        empty.do("STEP()")
-        check(empty.eval("HP()") == "515" and empty.eval("CHEAT_CALLS") == 1,
-              "a cheat command that does nothing: the value is written directly")
-        throws = Run(folder("throws"), "CHEAT_MODE = 'throws'")
+        # --- The bar's widgets.
+        kept = Run(folder("kept"))
+        kept.do("for i = 1, 15 do STEP() end")
+        check(kept.eval("SEARCHES") == 1 and kept.eval("BAR_CALLS") == 15, "15 heals: one search, the widget is kept")
+        kept.do("STEP()")
+        check(kept.eval("SEARCHES") == 2 and kept.eval("BAR_CALLS") == 16, "15 heals (30 s) after a search: a new search")
+        nobar = Run(folder("nobar"), "BARS = {}")
+        nobar.do("for i = 1, 14 do STEP() end")
+        check(nobar.eval("HP()") == "710" and nobar.eval("SEARCHES") == 1
+              and not any("Error" in line for line in nobar.log()),
+              "no bar widget: the regen goes on, no search on every step, no error")
+        gone = Run(folder("gone"))
+        gone.do("STEP() BAR.valid = false STEP()")
+        check(gone.eval("HP()") == "530" and gone.eval("BAR_CALLS") == 1 and gone.eval("SEARCHES") == 1,
+              "a widget that is gone gets no call")
+        gone.do("BAR.valid = true STEP()")
+        check(gone.eval("SEARCHES") == 2 and gone.eval("BAR_CALLS") == 2,
+              "all widgets gone: the next heal searches at once")
+        throws = Run(folder("throws"), "BAR_MODE = 'throws'")
         throws.do("STEP()")
-        check(throws.eval("HP()") == "515" and any("GM_SetHealth failed" in line for line in throws.log()),
-              "a cheat command that throws: logged, the value is written directly")
+        check(throws.eval("HP()") == "515" and any("OnHeathChanged failed" in line for line in throws.log())
+              and not any("Error" in line for line in throws.log()),
+              "a handler that throws: logged, the value is written")
         mapload = Run(folder("mapload"))
         mapload.do("STEP() MAP_HOOKS[1]() STEP(3)")
-        check(mapload.eval("HP()") == "530" and mapload.eval("CONTROLLER_CALLS") == 2,
-              "after a map load: the controller is found again; the first step counts one step, not the loading time")
+        check(mapload.eval("HP()") == "530" and mapload.eval("CONTROLLER_CALLS") == 2
+              and mapload.eval("SEARCHES") == 2, "after a map load: controller and bar found again; the first step counts one step, not the loading time")
 
         # --- LogDetail.
         d = Run(folder("detail", shipped_text.replace("LogDetail = false,", "LogDetail = true, ")))
@@ -250,7 +272,7 @@ def main() -> None:
         for line in log[-4:]:
             print("      log: " + line)
         check(any("regen on (out of combat)" in line for line in log)
-              and any("heal 1: health 500.0 -> 515.0 of 1000.0 (+15.00 in 2.00 s) via GM_SetHealth" in line
+              and any("heal 1: health 500.0 -> 515.0 of 1000.0 (+15.00 in 2.00 s), bar: 1 widget(s)" in line
                       for line in log)
               and any("regen on (in combat)" in line for line in log)
               and any("regen waits: full health" in line for line in log)

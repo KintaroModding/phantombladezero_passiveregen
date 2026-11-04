@@ -25,8 +25,6 @@ no game file and does not touch your save.
 
 1. Install UE4SS for Phantom Blade Zero, for example [UE4SS](https://github.com/KintaroModding/ue4ss) (its zip
    `phantombladezero_ue4ss_<version>.zip`: the official UE4SS build with a config that makes it run in this game).
-   Keep its `CheatManagerEnablerMod` on (it is on by default): the mod heals through the game's health command, which
-   needs it.
 2. Download the zip of the latest release on GitHub (`phantombladezero_passiveregen_<version>.zip`).
 3. Unpack it into the game folder `platform\steam\`, next to the game's exe. It adds the folder
    `ue4ss\Mods\phantombladezero_passiveregen\` (with the file `enabled.txt`, UE4SS starts it by itself).
@@ -58,12 +56,10 @@ the line `[Passive Regen] Settings: ...`, and names each value it could not use.
 
 ## Compatibility
 
-- Game version: Release (Steam build 26266538) (`CL-301524_JKS-17219`).
+- Game version: Steam build 26367565 (`CL-302256_JKS-17280`).
 - Tested with UE4SS `v3.0.1-1195-g1ceefac8`.
 - Other mods that heal you (for example
   [Live by the Blade](https://github.com/KintaroModding/phantombladezero_livebytheblade)) add up with it.
-- Without UE4SS's `CheatManagerEnablerMod` the regen still works, but the health bar shows it only at your next
-  health change.
 
 ## Known issues
 
